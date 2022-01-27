@@ -73,7 +73,6 @@ struct{
 
 struct{
     int expected_seqnum;
-    struct pkt* lastReceivedPacket;
 }receiver;
 
 
@@ -166,11 +165,6 @@ void A_input(struct pkt packet) {
         stoptimer(0);
     } else {
         printf("A_input: received negative Acknowledgement\n");
-        printf("A_input: resend ");
-        printf(sender.currentPacket->payload, 20);
-        printf("\n");
-        // resend the packet at the start of the sender buffer
-        tolayer3(0, *sender.currentPacket);
     }
 }
 
@@ -198,28 +192,17 @@ void A_init() {
 
 /* called from layer 3, when a packet arrives for layer 4 at B*/
 void B_input(struct pkt packet) {
-    struct pkt* lastPacket = receiver.lastReceivedPacket;
-    if (lastPacket != NULL && strncmp(packet.payload, lastPacket->payload, 20) == 0 && packet.checksum == lastPacket->checksum){
-        printf("B_input: detected duplicate of ");
-        print(lastPacket->payload, 20);
-        printf("\n\n");
-        int checksum = calculate_checksum(NULL, packet.acknum, packet.acknum);
-        struct pkt *ackPacket = makePacket(packet.acknum, NULL, checksum);
-        tolayer3(1, *ackPacket);
-        free(ackPacket);
-        return;
-    }
     if (isAcknowledged(&packet, receiver.expected_seqnum) && isNotCorrupted(&packet)) {
         // make Ack packet
         int checksum = calculate_checksum(NULL, receiver.expected_seqnum, receiver.expected_seqnum);
         struct pkt *ackPacket = makePacket(receiver.expected_seqnum, NULL, checksum);
+	tolayer5(1, packet.payload);
         tolayer3(1, *ackPacket);
         printf("B_input: received ");
         print(packet.payload, 20);
         printf("\n\n");
         printf("B_input: sending Acknowledgment\n");
         receiver.expected_seqnum = (receiver.expected_seqnum + 1) % 2;
-        receiver.lastReceivedPacket = makePacket(packet.seqnum, packet.payload, packet.checksum);
     } else {
         printf("B_input: Received corrupt packet \n");
         printf("B_input:  send neg ack \n");
