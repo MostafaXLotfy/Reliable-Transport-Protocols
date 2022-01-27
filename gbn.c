@@ -61,16 +61,23 @@ void B_init();
 
 /********* STUDENTS WRITE THE NEXT SEVEN ROUTINES *********/
 
+struct {
+    int nextSeqnum;
+    int windowSize;
+    int base;
+    float timeout;
+    struct pkt *sndpkt[50];
+    char buffer[50][20];
+    int bufferHead, bufferNext;
+    int bufferSize;
+}sender;
 
-const int bufferSize = 50;
-struct pkt *sndpkt[50];
-char buffer[50][20];
-//todo: better naming
-int bufferHead, bufferNext;
+struct {
+    int expectedSeqnum;
 
-int nextseqnum, expectedseqnum, windowSize;
-int base;
-float A_timeout;
+}receiver;
+
+
 
 struct pkt *makePacket(int state, char *payload, int checksum) {
     struct pkt *packet = (struct pkt *) malloc(sizeof(struct pkt));
@@ -112,27 +119,34 @@ void print(const char *string, int size) {
 
 /* called from layer 5, passed the data to be sent to other side */
 void A_output(struct msg message) {
-//  printf("A_output: ");
-//  print(message.data, 20);
-//  printf("\n");
-
-    if (nextseqnum < base + windowSize) {
-        if(bufferHead == bufferNext){
-            int checksum = calculate_checksum(message.data, nextseqnum, nextseqnum);
-            sndpkt[nextseqnum] = makePacket(nextseqnum, message.data, checksum);
+ printf("A_output: ");
+ print(message.data, 20);
+ printf("\n");
+ // the sender sends packets only if there is space availabe in the window
+    if (sender.nextSeqnum < sender.base + sender.windowSize) {
+        if(sender.bufferHead == sender.bufferNext){
+            // when buffer is empty then make a packet and put it in the sndpkt array
+            int checksum = calculate_checksum(message.data, sender.nextSeqnum, sender.nextSeqnum);
+            sender.sndpkt[sender.nextSeqnum] = makePacket(sender.nextSeqnum, message.data, checksum);
+        
         }else{
-            int checksum = calculate_checksum(buffer[bufferHead], nextseqnum, nextseqnum);
-            sndpkt[nextseqnum] = makePacket(nextseqnum, buffer[bufferHead], checksum);
-            bufferHead = (bufferHead + 1) % bufferSize;
-            strncpy(buffer[bufferNext], message.data, 20);
-            bufferNext = (bufferNext + 1) % bufferSize;
+            // when there is something in the buffer make a packet of the first message in the buffer
+            // put the coming message into the buffer
+            int checksum = calculate_checksum(sender.buffer[sender.bufferHead], sender.nextSeqnum, sender.nextSeqnum);
+            sender.sndpkt[sender.nextSeqnum] = makePacket(sender.nextSeqnum, sender.buffer[sender.bufferHead], checksum);
+            sender.bufferHead = (sender.bufferHead + 1) % sender.bufferSize;
+            strncpy(sender.buffer[sender.bufferNext], message.data, 20);
+            sender.bufferNext= (sender.bufferNext + 1) % sender.bufferSize;
         }
-        tolayer3(0, *sndpkt[nextseqnum]);
-        if (base == nextseqnum) starttimer(0, A_timeout);
-        nextseqnum++;
+        // send the next message
+        tolayer3(0, *sender.sndpkt[sender.nextSeqnum]);
+        
+        if (sender.base == sender.nextSeqnum) starttimer(0, sender.timeout);
+        sender.nextSeqnum++;
     } else {
-        strncpy(buffer[bufferNext], message.data, 20);
-        bufferNext = (bufferNext + 1) % bufferSize;
+        // if the sender is not allowed to send messages then put the messages in the buffer
+        strncpy(sender.buffer[sender.bufferNext], message.data, 20);
+        sender.bufferNext = (sender.bufferNext + 1) % sender.bufferSize;
     }
 }
 
@@ -145,36 +159,31 @@ void B_output(struct msg message)  /* need be completed only for extra credit */
 void A_input(struct pkt packet) {
 
     // resend the packet if the checksum or the acknum is wrong
-    if (isAcknowledged(&packet, base) && isNotCorrupted(&packet)) {
-        base = packet.acknum + 1;
-        if (base == nextseqnum) stoptimer(0);
+    if (isAcknowledged(&packet, sender.base) && isNotCorrupted(&packet)) {
+        free((void *)sender.sndpkt[sender.base]);
+        sender.base = packet.acknum + 1;
+        if (sender.base == sender.nextSeqnum) stoptimer(0);
     } else {
-        for (int i = base; i < nextseqnum; i++) {
-            tolayer3(0, *sndpkt[i]);
-        }
-
+        printf("A_input::received negative acknowledgment\n");
     }
-    /*if not resent last packet */
-
-    /*if yes increment seq_no and exit */
 }
 
-/* called when A's timer goes off */
-
 void A_timerinterrupt() {
-    for (int i = base; i < nextseqnum; i++) {
-        tolayer3(0, *sndpkt[i]);
+    // resend the packets starting from the base 
+    for (int i = sender.base; i < sender.nextSeqnum; i++) {
+        tolayer3(0, *sender.sndpkt[i]);
     }
-    starttimer(0, A_timeout);
+    starttimer(0, sender.timeout);
 }
 
 /* the following routine will be called once (only) before any other */
 /* entity A routines are called. You can use it to do any initialization */
 void A_init() {
-    windowSize = 8;
-    A_timeout = (float) (5 * windowSize + 10);
-    base = 0;
-    nextseqnum = 0;
+    sender.windowSize = 8;
+    sender.timeout = (float)(5 * sender.windowSize + 10);
+    sender.base = 0;
+    sender.nextSeqnum = 0;
+    sender.bufferSize = 50;
 }
 
 
@@ -182,22 +191,21 @@ void A_init() {
 
 /* called from layer 3, when a packet arrives for layer 4 at B*/
 void B_input(struct pkt packet) {
-    //TODO::detect duplicates
 
     // calculate the checksum for the received packet
-
-    if (isNotCorrupted(&packet) && isAcknowledged(&packet, expectedseqnum)) {
-        int checksum = calculate_checksum(NULL, expectedseqnum, expectedseqnum);
-        struct pkt *ackPacket = makePacket(expectedseqnum, NULL, checksum);
+    if (isNotCorrupted(&packet) && isAcknowledged(&packet, receiver.expectedSeqnum)) {
+        int checksum = calculate_checksum(NULL, receiver.expectedSeqnum, receiver.expectedSeqnum);
+        struct pkt *ackPacket = makePacket(receiver.expectedSeqnum, NULL, checksum);
         tolayer3(1, *ackPacket);
-        expectedseqnum++;
+        receiver.expectedSeqnum++;
         printf("B_input: received ");
         print(packet.payload, 20);
         printf("(seq = %d)\n", packet.seqnum);
-//        printf("B_input: send Acknowledgement\n");
+        printf("B_input: send Acknowledgement\n");
+        tolayer5(1, packet.payload);
     } else {
-        int checksum = calculate_checksum(NULL, expectedseqnum - 1, expectedseqnum - 1);
-        struct pkt *tempPacket = makePacket(expectedseqnum - 1, NULL, checksum);
+        int checksum = calculate_checksum(NULL, receiver.expectedSeqnum - 1, receiver.expectedSeqnum - 1);
+        struct pkt *tempPacket = makePacket(receiver.expectedSeqnum - 1, NULL, checksum);
         tolayer3(1, *tempPacket);
         free((void *) tempPacket);
     }
@@ -210,6 +218,7 @@ void B_timerinterrupt() {
 /* the following rouytine will be called once (only) before any other */
 /* entity B routines are called. You can use it to do any initialization */
 void B_init() {
+    receiver.expectedSeqnum = 0;
 }
 
 
