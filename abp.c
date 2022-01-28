@@ -92,7 +92,6 @@ struct pkt *makePacket(int state, char *payload, int checksum) {
     return packet;
 }
 
-
 int calculate_checksum(const char *payload, int seqnum, int acknum) {
 
     int checksum = seqnum + acknum;
@@ -116,18 +115,20 @@ int isNotCorrupted(const struct pkt *packet) {
 }
 
 
-void print(const char *string, int size) {
+void print_message(const char *string, int size) {
+    printf("[");
     for (int i = 0; i < size; i++) {
         printf("%c", string[i]);
     }
+    printf("]");
 }
 
 /* called from layer 5, passed the data to be sent to other side */
 void A_output(struct msg message) {
 
     if(sender.is_transmitting){
-        printf("A_output: dropped ");
-        print(message.data, 20);
+        printf("[A] drop ");
+        print_message(message.data, 20);
         printf("\n");
         return;
     }
@@ -140,9 +141,9 @@ void A_output(struct msg message) {
 
     tolayer3(0, *sender.currentPacket);
     starttimer(0, sender.timeout);
-    printf("A_output: send ");
-    print(message.data, 20);
-    printf("\n");
+    printf("[A] send");
+    print_message(message.data, 20);
+    printf(" (seq = %d)\n" ,sender.next_seqnum);
 }
 
 void B_output(struct msg message)  /* need be completed only for extra credit */
@@ -156,7 +157,7 @@ void A_input(struct pkt packet) {
     // resend the packet if the checksum or the acknum is wrong
     if (isAcknowledged(&packet, sender.next_seqnum) && isNotCorrupted(&packet)) {
 
-        printf("A_input: received Acknowledgement\n\n");
+        printf("[A] ack %d\n", packet.acknum);
         free((void *) sender.currentPacket);
 
         // change the current ack and seq num
@@ -164,16 +165,17 @@ void A_input(struct pkt packet) {
         sender.is_transmitting = 0;
         stoptimer(0);
     } else {
-        printf("A_input: received negative Acknowledgement\n");
+        printf("[A] nack %d\n", packet.acknum);
     }
 }
 
 
 /* called when A's timer goes off */
 void A_timerinterrupt() {
-    printf("A_timerinterrupt: resending ");
-    print(sender.currentPacket->payload, 20);
-    printf("\n\n");
+    printf("[A] timer_interrupt\n");
+    printf("[A] resend ");
+    print_message(sender.currentPacket->payload, 20);
+    printf(" (seq = %d)\n" ,sender.next_seqnum);
     tolayer3(0, *sender.currentPacket);
     starttimer(0, sender.timeout);
 }
@@ -181,7 +183,6 @@ void A_timerinterrupt() {
 /* the following routine will be called once (only) before any other */
 /* entity A routines are called. You can use it to do any initialization */
 void A_init() {
-
     sender.timeout = (float) 20;
     sender.next_seqnum = 0;
     sender.is_transmitting = false;
@@ -196,17 +197,17 @@ void B_input(struct pkt packet) {
         // make Ack packet
         int checksum = calculate_checksum(NULL, receiver.expected_seqnum, receiver.expected_seqnum);
         struct pkt *ackPacket = makePacket(receiver.expected_seqnum, NULL, checksum);
-	tolayer5(1, packet.payload);
+        tolayer5(1, packet.payload);
         tolayer3(1, *ackPacket);
-        printf("B_input: received ");
-        print(packet.payload, 20);
-        printf("\n\n");
-        printf("B_input: sending Acknowledgment\n");
+        printf("[B] receieve ");
+        print_message(packet.payload, 20);
+        printf("\n");
+        printf("[B] send Ack %d\n", receiver.expected_seqnum);
         receiver.expected_seqnum = (receiver.expected_seqnum + 1) % 2;
     } else {
-        printf("B_input: Received corrupt packet \n");
-        printf("B_input:  send neg ack \n");
         int temp = (receiver.expected_seqnum + 1) % 2;
+        printf("[B] corrupt message\n");
+        printf("[B] send nack %d\n", temp);
         int checksum = calculate_checksum(NULL, temp, temp);
         struct pkt *tempPacket = makePacket(temp, NULL, checksum);
         tolayer3(1, *tempPacket);
